@@ -219,6 +219,18 @@ try {
   }
   $("anim").firstChild.click();     // start on "run"
 
+  // Seed the readouts from one real draw. The animation loop refines these, but a
+  // background tab may never get a frame, and a panel full of em-dashes reads as
+  // broken rather than as unsampled.
+  renderer.render(scene, camera);
+  {
+    const t0 = performance.now();
+    for (let i = 0; i < 10; i++) renderer.render(scene, camera);
+    $("cost").textContent = ((performance.now() - t0) / 10).toFixed(2) + " ms";
+    $("calls").textContent = renderer.info.render.calls;
+    $("tris").textContent = renderer.info.render.triangles.toLocaleString();
+  }
+
   const camBtns = { camOrbit: "orbit", camChase: "chase", camTop: "top" };
   let camMode = "orbit";
   for (const id in camBtns) {
