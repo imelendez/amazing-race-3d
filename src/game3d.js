@@ -83,7 +83,7 @@ renderer.toneMappingExposure = 1.15;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x05070b);
-scene.fog = new THREE.Fog(0x05070b, 55, 260);
+scene.fog = new THREE.Fog(0x070c14, 70, 330);
 
 const camera = new THREE.PerspectiveCamera(62, 1, 0.1, 1200);
 
@@ -272,30 +272,30 @@ async function boot() {
   portal.position.copy(TO3(M.PORTAL.x, M.PORTAL.y, 0));
   scene.add(portal);
 
-  const orbGeo = new THREE.SphereGeometry(2.4, 16, 12);
+  const orbGeo = new THREE.SphereGeometry(0.95, 16, 12);
   for (const o of sim.orbs) {
     const m = new THREE.Mesh(orbGeo, new THREE.MeshStandardMaterial({
       color: ORB_TINT[o.c] || 0xffffff, emissive: ORB_TINT[o.c] || 0xffffff,
       emissiveIntensity: 1.1, roughness: 0.35,
     }));
-    m.position.copy(TO3(o.x, o.y, 2.6));
+    m.position.copy(TO3(o.x, o.y, 1.9));
     scene.add(m);
     orbMeshes.push(m);
   }
 
-  const donutGeo = new THREE.TorusGeometry(2.0, 0.8, 10, 20);
+  const donutGeo = new THREE.TorusGeometry(0.85, 0.34, 10, 20);
   for (const d of sim.donuts) {
     const m = new THREE.Mesh(donutGeo, new THREE.MeshStandardMaterial({
       color: 0xffb35c, emissive: 0xff8a3c, emissiveIntensity: 0.55, roughness: 0.5,
     }));
-    m.position.copy(TO3(d.x, d.y, 2.6));
+    m.position.copy(TO3(d.x, d.y, 1.7));
     m.rotation.x = Math.PI / 2;
     scene.add(m);
     donutMeshes.push(m);
   }
 
-  poolShot(shotPool, 0x9ff4ff, 0.55);
-  poolShot(eshotPool, 0xff8a5c, 0.7);
+  poolShot(shotPool, 0x9ff4ff, 0.28);
+  poolShot(eshotPool, 0xff8a5c, 0.36);
 
   ready = true;
   $("loading").hidden = true;
@@ -305,7 +305,7 @@ async function boot() {
 }
 
 // ---------------------------------------------------------------- particles
-const partGeo = new THREE.SphereGeometry(0.32, 5, 4);
+const partGeo = new THREE.SphereGeometry(0.13, 5, 4);   // Ralph is ~2 units tall
 function burst(x, y, z, color, n, speed) {
   for (let i = 0; i < n; i++) {
     const m = new THREE.Mesh(partGeo, new THREE.MeshBasicMaterial({ color, transparent: true }));
@@ -321,7 +321,7 @@ function burst(x, y, z, color, n, speed) {
 }
 
 // ---------------------------------------------------------------- camera
-const CAM_DIST = 11, CAM_HEIGHT = 3.4;
+const CAM_DIST = 8, CAM_HEIGHT = 2.6;
 function updateCamera(p) {
   // Look direction in game space, then converted. Pitch raises the camera rather
   // than tilting past the character.
@@ -374,10 +374,10 @@ function handleEvents() {
       case "shoot": Sound.shoot(); break;
       case "enemyShoot": Sound.enemyShoot(); break;
       case "hit": Sound.hit(); burst(ev.x, ev.y, ev.z, 0xffd24d, 6, 9); break;
-      case "kill": Sound.kill(); burst(ev.x, ev.y, ev.z, 0xff8a5c, 26, 14); break;
+      case "kill": Sound.kill(); burst(ev.x, ev.y, ev.z, 0xff8a5c, 16, 13); break;
       case "sparks": burst(ev.x, ev.y, ev.z, new THREE.Color(ev.color), 4, 7); break;
-      case "orb": Sound.orb(); burst(ev.x, ev.y, ev.z, new THREE.Color(ORB_TINT[ev.color] || 0xffffff), 18, 11); break;
-      case "donut": Sound.donut(); burst(ev.x, ev.y, ev.z, 0xffb35c, 14, 10); break;
+      case "orb": Sound.orb(); burst(ev.x, ev.y, ev.z, new THREE.Color(ORB_TINT[ev.color] || 0xffffff), 14, 10); break;
+      case "donut": Sound.donut(); burst(ev.x, ev.y, ev.z, 0xffb35c, 10, 9); break;
       case "damage": Sound.damage(); flash(); break;
       case "denied": Sound.denied(); break;
       case "jump": Sound.jump(); break;
@@ -466,7 +466,7 @@ function frame(dtOverride) {
     const o = sim.orbs[i];
     orbMeshes[i].visible = !o.got;
     if (!o.got) {
-      orbMeshes[i].position.y = 2.6 + Math.sin(sim.t * 2.4 + i) * 0.5;
+      orbMeshes[i].position.y = 1.9 + Math.sin(sim.t * 2.4 + i) * 0.35;
       orbMeshes[i].rotation.y += dt;
     }
   }
