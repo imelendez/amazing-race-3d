@@ -1,8 +1,19 @@
-# Phase 3 spike — Panda3D `.egg` → glTF → Three.js
+# The Amazing Race — 3D
 
-**Result: it works.** The 2016 game's real maze, its real character, and his real
-run/walk cycles now render in a browser in **under a millisecond a frame**, and the
-bone rotations are numerically identical to what Panda3D produces.
+**[▶ Play it](https://imelendez.github.io/amazing-race-3d/)**
+
+A playable 3D browser port of a 2016 Panda3D college game, running the original's own
+maze, models, and character rig. Kill 4 enemies, collect 3 orbs, reach the portal
+before the 4:00 clock runs out.
+
+**WASD** move · **mouse** look · **click** or **F** shoot · **Space** jump · **M** mute
+
+It started as a spike to answer one question — *can a 48-joint rigged character from a
+2004-era format reach the browser and still animate?* — and the answer turned out to be
+yes, so it became a game. The technical writeup below is the spike; §11 covers what it
+took to make it playable. The conversion tool is
+[`tools/panda2gltf.py`](tools/panda2gltf.py), and the original viewer is still at
+[`spike.html`](https://imelendez.github.io/amazing-race-3d/spike.html).
 
 ![The original maze rendering in Three.js](docs/maze3d.png)
 

@@ -53,7 +53,8 @@ class Gltf:
             "materials": [], "textures": [], "images": [], "samplers": [],
         }
         self.bin = bytearray()
-        self._images = {}      # abs path -> texture index
+        self._out = "."
+        self._images = {}      # (abs path, max_px) -> texture index
         self._materials = {}   # texture index -> material index
 
     # -- binary helpers ----------------------------------------------------
@@ -213,19 +214,35 @@ def find_texture(root_np, geom_state):
     return tex
 
 
-def embed_image(gltf, path):
+def embed_image(gltf, path, max_px=None):
     """Embed a texture once, however many primitives reference it.
 
     Getting this wrong is expensive and silent: the maze has 301 separate geoms, so
     embedding per-primitive produced a 118 MB .glb from a 1 MB source.
     """
-    key = os.path.abspath(path)
+    key = (os.path.abspath(path), max_px)
     if key in gltf._images:
         return gltf._images[key]
     ext = os.path.splitext(path)[1].lower()
     mime = "image/png" if ext == ".png" else "image/jpeg"
+
+    # The original art ships game textures at print resolution - space.png is
+    # 1884x1064 (2.6 MB) for a portal nobody inspects up close.
+    if max_px:
+        from panda3d.core import PNMImage, Filename
+        img = PNMImage()
+        if img.read(Filename.fromOsSpecific(path)) and max(img.getXSize(), img.getYSize()) > max_px:
+            sc = max_px / float(max(img.getXSize(), img.getYSize()))
+            small = PNMImage(max(1, int(img.getXSize() * sc)), max(1, int(img.getYSize() * sc)))
+            small.quickFilterFrom(img)
+            tmp = os.path.join(os.path.dirname(os.path.abspath(gltf._out)),
+                               "._tex%d%s" % (len(gltf._images), ext))
+            small.write(Filename.fromOsSpecific(tmp))
+            path = tmp
     with open(path, "rb") as f:
         data = f.read()
+    if max_px and path.find("._tex") >= 0:
+        os.remove(path)
     view = gltf.view(data)
     gltf.json["images"].append({"bufferView": view, "mimeType": mime})
     if not gltf.json["samplers"]:
@@ -287,6 +304,7 @@ def export(args):
     # Geoms sharing a material are merged into one primitive. The maze arrives as 301
     # separate geoms; left alone that's 301 draw calls a frame for 3,612 triangles.
     buckets = {}
+    total_welded = [0]
     total_v = total_t = 0
     scale = args.scale
 
@@ -344,10 +362,51 @@ def export(args):
         if tex is not None:
             fn = tex.getFullpath().toOsSpecific()
             if os.path.exists(fn):
-                ti = embed_image(gltf, fn)
+                ti = embed_image(gltf, fn, args.max_texture)
         if args.texture and ti is None and os.path.exists(args.texture):
-            ti = embed_image(gltf, args.texture)
+            ti = embed_image(gltf, args.texture, args.max_texture)
         mi = make_material(gltf, ti, os.path.basename(args.actor or args.model))
+
+        # Weld duplicate vertices. These meshes come out of Rhino/Maya essentially
+        # unshared - cheken2 has 101,308 vertices for 48,264 triangles, i.e. ~2.1
+        # vertices per triangle where a welded mesh approaches 0.5. Deduplicating
+        # identical (position, normal, uv, skin) tuples costs nothing visually.
+        if not args.no_weld:
+            seen, remap = {}, [0] * (len(pos) // 3)
+            wp, wn, wu, wj, ww = [], [], [], [], []
+            for i in range(len(pos) // 3):
+                k = (round(pos[i*3], 5), round(pos[i*3+1], 5), round(pos[i*3+2], 5))
+                # Exact welding needs matching normals, but these meshes were exported
+                # with a split normal per face, so nothing ever matches (40 of 101,268
+                # merged on cheken2). --smooth-weld drops the normal from the key and
+                # averages instead, trading hard facets for a ~4x smaller mesh.
+                if nrm and not args.smooth_weld:
+                    k += (round(nrm[i*3], 4), round(nrm[i*3+1], 4), round(nrm[i*3+2], 4))
+                if uv:
+                    k += (round(uv[i*2], 5), round(uv[i*2+1], 5))
+                if jnt:
+                    k += tuple(jnt[i*4:i*4+4]) + tuple(round(w, 4) for w in wgt[i*4:i*4+4])
+                j = seen.get(k)
+                if j is None:
+                    j = seen[k] = len(wp) // 3
+                    wp.extend(pos[i*3:i*3+3])
+                    if nrm: wn.extend(nrm[i*3:i*3+3])
+                    if uv:  wu.extend(uv[i*2:i*2+2])
+                    if jnt:
+                        wj.extend(jnt[i*4:i*4+4]); ww.extend(wgt[i*4:i*4+4])
+                elif nrm and args.smooth_weld:
+                    for c in range(3):                 # accumulate for averaging
+                        wn[j*3 + c] += nrm[i*3 + c]
+                remap[i] = j
+            if nrm and args.smooth_weld:
+                for v in range(len(wn) // 3):
+                    x, y, z = wn[v*3], wn[v*3+1], wn[v*3+2]
+                    L = math.sqrt(x*x + y*y + z*z) or 1.0
+                    wn[v*3], wn[v*3+1], wn[v*3+2] = x/L, y/L, z/L
+            welded_from = len(pos) // 3
+            pos, nrm, uv, jnt, wgt = wp, wn, wu, wj, ww
+            idx = [remap[i] for i in idx]
+            total_welded[0] += welded_from - len(pos) // 3
 
         # only merge geoms with identical attribute sets, or the arrays desynchronise
         key = (mi, bool(nrm), bool(uv), bool(jnt))
@@ -372,8 +431,14 @@ def export(args):
                 struct.pack("<%dH" % len(b["jnt"]), *b["jnt"]), len(b["jnt"]) // 4,
                 UNSIGNED_SHORT, "VEC4", ARRAY_BUFFER)
             attrs["WEIGHTS_0"] = gltf.floats(b["wgt"], 4, ARRAY_BUFFER)
-        ia = gltf.accessor(struct.pack("<%dI" % len(b["idx"]), *b["idx"]),
-                           len(b["idx"]), UNSIGNED_INT, "SCALAR", ELEMENT_ARRAY_BUFFER)
+        # 16-bit indices halve the index buffer, and every mesh here fits
+        nverts = len(b["pos"]) // 3
+        if nverts < 65536:
+            ia = gltf.accessor(struct.pack("<%dH" % len(b["idx"]), *b["idx"]),
+                               len(b["idx"]), UNSIGNED_SHORT, "SCALAR", ELEMENT_ARRAY_BUFFER)
+        else:
+            ia = gltf.accessor(struct.pack("<%dI" % len(b["idx"]), *b["idx"]),
+                               len(b["idx"]), UNSIGNED_INT, "SCALAR", ELEMENT_ARRAY_BUFFER)
         primitives.append({"attributes": attrs, "indices": ia, "material": b["mi"]})
 
     gltf.json["meshes"].append({"name": "mesh", "primitives": primitives})
@@ -467,8 +532,9 @@ def export(args):
                                             "channels": channels})
 
     size = gltf.write(args.out)
-    print("%s  %.2f MB   %d verts  %d tris  %d joints  %d anims  %d prims"
-          % (os.path.basename(args.out), size / 1048576, total_v, total_t,
+    kept = sum(len(b["pos"]) // 3 for b in buckets.values())
+    print("%-16s %6.2f MB  %7d verts (welded %d away)  %6d tris  %2d joints  %d anims  %d prims"
+          % (os.path.basename(args.out), size / 1048576, kept, total_welded[0], total_t,
              len(joints), len(gltf.json.get("animations", [])), len(primitives)))
 
 
@@ -483,6 +549,11 @@ def main():
                     help="baked into vertices; use the game's runtime setScale")
     ap.add_argument("--texture", help="texture applied at runtime, not stored in the egg")
     ap.add_argument("--model-path", default=".", help="directory the assets live in")
+    ap.add_argument("--no-weld", action="store_true", help="keep duplicate vertices")
+    ap.add_argument("--max-texture", type=int, default=0,
+                    help="downscale embedded textures to this many pixels on the long edge")
+    ap.add_argument("--smooth-weld", action="store_true",
+                    help="weld by position and average normals; much smaller, smooth-shaded")
     args = ap.parse_args()
     loadPrcFileData("", "model-path %s" % os.path.abspath(args.model_path))
     export(args)

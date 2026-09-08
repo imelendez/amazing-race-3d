@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Phase 3 Spike — Three.js</title>
+<style>
+  :root { --bg:#06090e; --panel:#0c1219; --line:#1b2735; --cyan:#2ee6f6; --dim:#7d8b9c; --text:#dfe9f3; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--text);
+    font:13px/1.55 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif; overflow:hidden; }
+  canvas { display:block; }
+
+  #panel {
+    position:fixed; top:14px; left:14px; width:262px; background:rgba(12,18,25,.9);
+    border:1px solid var(--line); border-radius:4px; padding:14px; backdrop-filter:blur(8px);
+  }
+  h1 { margin:0 0 2px; font-size:12px; letter-spacing:.16em; text-transform:uppercase; color:var(--cyan); }
+  .sub { margin:0 0 12px; color:var(--dim); font-size:11px; }
+
+  .row { display:flex; justify-content:space-between; gap:10px; padding:3px 0;
+         font:11.5px ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .row span:last-child { color:var(--dim); font-variant-numeric:tabular-nums; }
+  hr { border:0; border-top:1px solid var(--line); margin:11px 0; }
+
+  .foot { margin:9px 0 0; font-size:10.5px; line-height:1.5; color:#5d6b7d; }
+  .foot b { color:#8fa1b5; font-weight:600; }
+  .label { font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--dim); margin-bottom:6px; }
+  .btns { display:flex; gap:6px; flex-wrap:wrap; }
+  button {
+    flex:1; min-width:62px; cursor:pointer; background:#131c27; color:var(--text);
+    border:1px solid #26374a; border-radius:3px; padding:7px 4px;
+    font:600 11px ui-monospace,Menlo,monospace; letter-spacing:.06em;
+  }
+  button:hover { border-color:var(--cyan); }
+  button.on { background:var(--cyan); color:#04222a; border-color:var(--cyan); }
+
+  #status {
+    position:fixed; left:50%; top:40%; transform:translateX(-50%);
+    color:var(--dim); font:12px ui-monospace,Menlo,monospace; text-align:center;
+  }
+  #status.err { color:#ff6b7a; max-width:60ch; text-align:left; }
+  .hint { position:fixed; bottom:12px; left:50%; transform:translateX(-50%);
+          color:#54627a; font-size:11px; }
+</style>
+</head>
+<body>
+<div id="status">loading…</div>
+
+<div id="panel" hidden>
+  <h1>Phase 3 spike</h1>
+  <p class="sub">Panda3D <code>.egg</code> → glTF → Three.js</p>
+
+  <div class="row"><span>three.js</span><span id="ver">—</span></div>
+  <div class="row"><span>renderer</span><span id="rend">—</span></div>
+  <div class="row"><span>fps</span><span id="fps">—</span></div>
+  <div class="row"><span>render cost</span><span id="cost">—</span></div>
+  <div class="row"><span>draw calls</span><span id="calls">—</span></div>
+  <div class="row"><span>triangles</span><span id="tris">—</span></div>
+  <hr>
+  <div class="row"><span>ralph joints</span><span id="joints">—</span></div>
+  <div class="row"><span>clips</span><span id="clips">—</span></div>
+  <div class="row"><span>assets</span><span id="mb">—</span></div>
+
+  <p class="foot">fps follows the browser's frame scheduler and drops in a background
+     tab. <b>Render cost</b> is the real number.</p>
+
+  <hr>
+  <div class="label">Ralph animation</div>
+  <div class="btns" id="anim"></div>
+
+  <hr>
+  <div class="label">Camera</div>
+  <div class="btns">
+    <button id="camOrbit" class="on">Orbit</button>
+    <button id="camChase">Chase</button>
+    <button id="camTop">Top</button>
+  </div>
+</div>
+
+<p class="hint">drag to orbit · scroll to zoom</p>
+
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/"
+} }
+</script>
+
+<script type="module">
+import * as THREE from "three";
+import { GLTFLoader }    from "three/addons/loaders/GLTFLoader.js";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+const $ = id => document.getElementById(id);
+const status = $("status");
+
+/* The original's world coordinates are Panda's: X east, Y north, Z up.
+   The exporter's root node already flips Z-up to Y-up, so a game position
+   (x, y) lands at (x, 0, -y) in Three.js. Keeping the game's own numbers
+   means Phase 2's spawn tables drop straight in. */
+const at = (x, y, z = 0) => new THREE.Vector3(x, z, -y);
+
+const SPAWN  = at(25, -1);
+const PORTAL = at(-196, 177);
+// a few enemies from the original's table, with the scales utils.py used
+const ENEMIES = [
+  { at: at(-249, 419), s: 0.4 }, { at: at(-277, 356), s: 0.4 },
+  { at: at(-133,  83), s: 0.4 }, { at: at(-330, 241), s: 0.4 },
+  { at: at( -75, 141), s: 0.4 },
+];
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x06090e);
+scene.fog = new THREE.Fog(0x06090e, 60, 320);
+
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 2000);
+// The maze mesh has a ceiling and the spawn room is barely 13 units across, so an
+// interior camera is always nose-to-wall. Sit above it and clip the ceiling off.
+camera.position.copy(SPAWN).add(new THREE.Vector3(16, 19, 18));
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.copy(SPAWN).add(new THREE.Vector3(0, 3, 0));
+controls.enableDamping = true;
+
+// For the overhead view, slice the ceiling off instead of hiding meshes: the ceiling
+// and walls are one merged mesh, so a clipping plane is the only thing that separates
+// them. Ceiling sits at ~8.3 world units.
+const CEIL = new THREE.Plane(new THREE.Vector3(0, -1, 0), 6.5);
+renderer.localClippingEnabled = true;
+renderer.clippingPlanes = [CEIL];          // on by default; Chase turns it off
+
+// Lighting: the original lit the maze with cyan wall strips, so key it cool and
+// warm the fill slightly to keep the character readable against it.
+scene.add(new THREE.HemisphereLight(0x6fd8ff, 0x0a0f16, 1.1));
+const key = new THREE.DirectionalLight(0xdff4ff, 2.1);
+key.position.set(60, 120, 40);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+const d = 90;
+Object.assign(key.shadow.camera, { left: -d, right: d, top: d, bottom: -d, near: 1, far: 400 });
+scene.add(key);
+scene.add(new THREE.PointLight(0x7ee08a, 180, 90).translateX(PORTAL.x).translateY(6).translateZ(PORTAL.z));
+
+const loader = new GLTFLoader();
+const load = url => new Promise((res, rej) => loader.load(url, res, undefined, rej));
+
+let mixer = null, ralph = null, clips = {}, active = null;
+let bytes = 0;
+
+async function sizeOf(u) {
+  try { const r = await fetch(u, { method: "HEAD" }); return +r.headers.get("content-length") || 0; }
+  catch { return 0; }
+}
+
+try {
+  status.textContent = "loading maze, ralph, enemies…";
+  const urls = ["assets/maze.glb", "assets/ralph.glb", "assets/cheken.glb", "assets/gianteye.glb"];
+  bytes = (await Promise.all(urls.map(sizeOf))).reduce((a, b) => a + b, 0);
+  const [maze, ralphG, cheken, eye] = await Promise.all(urls.map(load));
+
+  maze.scene.traverse(o => { if (o.isMesh) { o.receiveShadow = true; o.castShadow = true; } });
+  scene.add(maze.scene);
+
+  ralph = ralphG.scene;
+  ralph.position.copy(SPAWN);
+  ralph.traverse(o => { if (o.isMesh) { o.castShadow = true; o.frustumCulled = false; } });
+  scene.add(ralph);
+
+  // the whole point of the spike: does the skeleton survive the round trip?
+  mixer = new THREE.AnimationMixer(ralph);
+  for (const c of ralphG.animations) clips[c.name] = mixer.clipAction(c);
+
+  for (const e of ENEMIES) {
+    const m = cheken.scene.clone(true);
+    m.position.copy(e.at);
+    m.scale.setScalar(e.s);
+    m.traverse(o => { if (o.isMesh) o.castShadow = true; });
+    scene.add(m);
+  }
+
+  eye.scene.position.copy(PORTAL);
+  scene.add(eye.scene);
+  const spinEye = eye.scene;
+
+  // ---- panel ----
+  status.hidden = true;
+  $("panel").hidden = false;
+  $("ver").textContent = "r" + THREE.REVISION;
+  $("rend").textContent = "WebGL2";
+  $("mb").textContent = (bytes / 1048576).toFixed(2) + " MB";
+
+  let skinned = null;
+  ralph.traverse(o => { if (o.isSkinnedMesh) skinned = o; });
+  $("joints").textContent = skinned ? skinned.skeleton.bones.length : 0;
+  $("clips").textContent = ralphG.animations.map(c => c.name).join(", ") || "none";
+
+  const names = ["run", "walk"];
+  for (const n of names.concat(["stop"])) {
+    const b = document.createElement("button");
+    b.textContent = n;
+    b.onclick = () => {
+      for (const el of $("anim").children) el.classList.remove("on");
+      b.classList.add("on");
+      if (active) active.fadeOut(0.25);
+      active = clips[n] || null;
+      if (active) active.reset().fadeIn(0.25).play();
+    };
+    $("anim").appendChild(b);
+  }
+  $("anim").firstChild.click();     // start on "run"
+
+  // Seed the readouts from one real draw. The animation loop refines these, but a
+  // background tab may never get a frame, and a panel full of em-dashes reads as
+  // broken rather than as unsampled.
+  renderer.render(scene, camera);
+  {
+    const t0 = performance.now();
+    for (let i = 0; i < 10; i++) renderer.render(scene, camera);
+    $("cost").textContent = ((performance.now() - t0) / 10).toFixed(2) + " ms";
+    $("calls").textContent = renderer.info.render.calls;
+    $("tris").textContent = renderer.info.render.triangles.toLocaleString();
+  }
+
+  const camBtns = { camOrbit: "orbit", camChase: "chase", camTop: "top" };
+  let camMode = "orbit";
+  for (const id in camBtns) {
+    $(id).onclick = () => {
+      camMode = camBtns[id];
+      for (const k in camBtns) $(k).classList.toggle("on", k === id);
+      // chase rides inside the maze, so it needs the ceiling back
+      renderer.clippingPlanes = camMode === "chase" ? [] : [CEIL];
+      controls.enabled = camMode !== "chase";
+      if (camMode === "top") {
+        camera.position.set(SPAWN.x, 165, SPAWN.z + 1);
+        controls.target.copy(SPAWN);
+      } else if (camMode === "orbit") {
+        camera.position.copy(ralph.position).add(new THREE.Vector3(16, 19, 18));
+        controls.target.copy(ralph.position).add(new THREE.Vector3(0, 2, 0));
+      }
+    };
+  }
+
+  // ---- loop ----
+  const clock = new THREE.Clock();
+  let acc = 0, frames = 0, renderMs = 0;
+  let walkT = 0;
+
+  renderer.setAnimationLoop(() => {
+    const dt = clock.getDelta();
+    if (mixer) mixer.update(dt);
+    spinEye.rotation.y += dt * 0.8;
+
+    // drift Ralph along a corridor so the run cycle reads as locomotion
+    if (active === clips.run || active === clips.walk) {
+      walkT += dt * (active === clips.run ? 1 : 0.45);
+      const span = 7;          // the spawn room is tiny; don't walk him into a wall
+      const s = Math.sin(walkT * 0.55);
+      ralph.position.set(SPAWN.x, 0, SPAWN.z + s * span);
+      ralph.rotation.y = Math.cos(walkT * 0.55) > 0 ? 0 : Math.PI;
+    }
+
+    if (camMode === "chase") {
+      // Ralph is ~2 units tall and the spawn room is ~13 across, so the chase cam
+      // has to sit close or it ends up buried in a wall.
+      const back = new THREE.Vector3(0, 3.2, 8).applyAxisAngle(new THREE.Vector3(0, 1, 0), ralph.rotation.y);
+      camera.position.lerp(ralph.position.clone().add(back), 0.12);
+      camera.lookAt(ralph.position.x, ralph.position.y + 1.6, ralph.position.z);
+    } else if (camMode === "orbit") {
+      controls.update();
+    }
+
+    // Time the draw itself. fps mixes frame cost with how often the browser
+    // schedules us; only one of those is something the scene controls.
+    const t0 = performance.now();
+    renderer.render(scene, camera);
+    const ms = performance.now() - t0;
+    renderMs = renderMs ? renderMs * 0.9 + ms * 0.1 : ms;
+
+    acc += dt; frames++;
+    if (clock.elapsedTime < 1.2) { acc = 0; frames = 0; }   // ignore first-frame upload
+    else if (acc >= 0.5) {
+      $("fps").textContent = (frames / acc).toFixed(0);
+      $("cost").textContent = renderMs.toFixed(2) + " ms";
+      $("calls").textContent = renderer.info.render.calls;
+      $("tris").textContent = renderer.info.render.triangles.toLocaleString();
+      acc = 0; frames = 0;
+    }
+  });
+
+  addEventListener("resize", () => {
+    camera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  });
+
+  window.__SPIKE = { THREE, scene, ralph, mixer, clips, renderer, camera, controls };
+} catch (err) {
+  status.className = "err";
+  status.textContent = "Failed: " + (err && err.message ? err.message : err);
+  console.error(err);
+}
+</script>
+</body>
+</html>
