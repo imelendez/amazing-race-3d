@@ -114,6 +114,9 @@ const sim = createSim(M);
 const keys = Object.create(null);
 const input = { mx: 0, my: 0, aim: 0, fire: false, jump: false };
 let mouseFire = false;
+const LOOK_SPEED = 0.0042;      // rad per pixel; 0.0022 felt like turning in treacle
+const TOUCH_LOOK = 0.010;
+const move = { x: 0, y: 0 };    // smoothed, so a key tap doesn't cross a corridor
 let yaw = Math.PI / 2, pitch = 0.24;
 let locked = false;
 
@@ -152,8 +155,8 @@ addEventListener("mousemove", (e) => {
   // Pointer lock is the good path, but it isn't always available (embedded frames,
   // or the player pressed Esc). Drag-to-look keeps the game controllable either way.
   if (!locked && !dragging) return;
-  yaw -= e.movementX * 0.0022;
-  pitch = Math.max(-0.35, Math.min(0.95, pitch + e.movementY * 0.0018));
+  yaw -= e.movementX * LOOK_SPEED;
+  pitch = Math.max(-0.30, Math.min(0.58, pitch + e.movementY * LOOK_SPEED * 0.8));
 });
 // Fire on any left click over the canvas. Gating this on pointer lock meant that
 // if the lock failed or the player pressed Esc, clicking did nothing whatsoever.
@@ -186,8 +189,8 @@ canvas.addEventListener("pointermove", (e) => {
     touch.move.x = d < 8 ? 0 : dx / d;
     touch.move.y = d < 8 ? 0 : -dy / d;
   } else if (e.pointerId === touch.lookId) {
-    yaw -= (e.clientX - touch.lastX) * 0.006;
-    pitch = Math.max(-0.35, Math.min(0.95, pitch + (e.clientY - touch.lastY) * 0.005));
+    yaw -= (e.clientX - touch.lastX) * TOUCH_LOOK;
+    pitch = Math.max(-0.30, Math.min(0.58, pitch + (e.clientY - touch.lastY) * TOUCH_LOOK * 0.8));
     touch.lastX = e.clientX; touch.lastY = e.clientY;
   }
 });
@@ -322,6 +325,10 @@ function burst(x, y, z, color, n, speed) {
 
 // ---------------------------------------------------------------- camera
 const CAM_DIST = 8, CAM_HEIGHT = 2.6;
+// The maze mesh tops out at z = 8.33. Pitching up used to raise the boom past that
+// (2.6 + 8*sin(0.95) = 9.1) and pop the camera through the ceiling into open space.
+const CEILING_Z = 8.33, CAM_MIN_Z = 0.85;
+
 function updateCamera(p) {
   // Look direction in game space, then converted. Pitch raises the camera rather
   // than tilting past the character.
@@ -332,14 +339,20 @@ function updateCamera(p) {
   const py = p.y - Math.sin(yaw) * back;
 
   // Pull the camera in if a wall is between it and the player — the maze has
-  // 13-unit rooms and a fixed boom ends up inside geometry constantly.
+  // 13-unit rooms, so a fixed boom ends up inside geometry constantly. Sample finely:
+  // at 8 steps an 8-unit boom skips a whole cell between probes and slides through
+  // thin walls.
+  const STEPS = 20;
   let f = 1;
-  for (let s = 1; s <= 8; s++) {
-    const t = s / 8;
+  for (let s = 1; s <= STEPS; s++) {
+    const t = s / STEPS;
     const tx = p.x + (px - p.x) * t, ty = p.y + (py - p.y) * t;
-    if (sim.hitsWall(tx, ty, 1.2)) { f = Math.max(0.22, (s - 1) / 8); break; }
+    if (sim.hitsWall(tx, ty, 1.4)) { f = Math.max(0.06, (s - 1) / STEPS); break; }
   }
-  camera.position.copy(TO3(p.x + (px - p.x) * f, p.y + (py - p.y) * f, p.z + up * f + 1.5 * (1 - f)));
+  // keep the camera inside the building, whatever the pitch
+  const rawZ = p.z + up * f + 1.5 * (1 - f);
+  const camZ = Math.min(CEILING_Z - 1.15, Math.max(CAM_MIN_Z, rawZ));
+  camera.position.copy(TO3(p.x + (px - p.x) * f, p.y + (py - p.y) * f, camZ));
   const look = TO3(p.x + Math.cos(yaw) * 9, p.y + Math.sin(yaw) * 9, p.z + 3.4);
   camera.lookAt(look);
   key.position.copy(TO3(p.x + 40, p.y + 30, 90));
@@ -414,16 +427,31 @@ function frame(dtOverride) {
   const dt = Math.min(0.05, typeof dtOverride === "number" ? dtOverride : clock.getDelta());
 
   if (sim.state === "play") {
-    let mx = 0, my = 0;
+    // forward/back at full speed, strafe reduced — sidestepping at the same rate as
+    // running is what made side-to-side feel like it crossed a whole corridor
+    let fwd = 0, side = 0;
+    if (keys.w || keys.ArrowUp) fwd += 1;
+    if (keys.s || keys.ArrowDown) fwd -= 1;
+    if (keys.d || keys.ArrowRight) side += 1;
+    if (keys.a || keys.ArrowLeft) side -= 1;
+    if (touch.move) { fwd += touch.move.y; side += touch.move.x; }
+    const mag = Math.hypot(fwd, side);
+    if (mag > 1) { fwd /= mag; side /= mag; }
+    side *= T.strafeFactor;
+
     const f = { x: Math.cos(yaw), y: Math.sin(yaw) };
     const r = { x: Math.cos(yaw - Math.PI / 2), y: Math.sin(yaw - Math.PI / 2) };
-    if (keys.w || keys.ArrowUp) { mx += f.x; my += f.y; }
-    if (keys.s || keys.ArrowDown) { mx -= f.x; my -= f.y; }
-    if (keys.d || keys.ArrowRight) { mx += r.x; my += r.y; }
-    if (keys.a || keys.ArrowLeft) { mx -= r.x; my -= r.y; }
-    if (touch.move) { mx += f.x * touch.move.y + r.x * touch.move.x; my += f.y * touch.move.y + r.y * touch.move.x; }
+    const tx = f.x * fwd + r.x * side;
+    const ty = f.y * fwd + r.y * side;
 
-    input.mx = mx; input.my = my;
+    // ramp toward the target instead of snapping to it
+    const k = Math.min(1, dt * T.moveSmoothing);
+    move.x += (tx - move.x) * k;
+    move.y += (ty - move.y) * k;
+    if (Math.abs(move.x) < 0.004) move.x = 0;
+    if (Math.abs(move.y) < 0.004) move.y = 0;
+
+    input.mx = move.x; input.my = move.y;
     input.aim = yaw;
     input.fire = mouseFire || touch.fire || !!keys.f || !!keys.Enter;
     input.jump = !!keys[" "];
@@ -550,6 +578,8 @@ $("mute").addEventListener("click", toggleMute);
 window.__GAME3D = { sim, T, scene, camera, renderer, startGame, frame,
                     get ready() { return ready; },
                     get yaw() { return yaw; }, set yaw(v) { yaw = v; },
+                    get pitch() { return pitch; }, set pitch(v) { pitch = v; },
+                    PITCH_MIN: -0.30, PITCH_MAX: 0.58, CEILING_Z,
                     keys, input };
 
 boot().catch((err) => {

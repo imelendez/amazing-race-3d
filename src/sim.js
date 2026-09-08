@@ -11,7 +11,12 @@
 
 export const T = {
   playerR: 3.2,
-  playerSpeed: 58,          // original ralphSpeed was 60
+  // The original ran at 60, but that was a top-down/behind view of a 1-unit-tall
+  // character in ~15-unit corridors — 58 units/sec is nearly 60 body-lengths a
+  // second, which reads as teleporting from a third-person camera. Slower here.
+  playerSpeed: 44,
+  strafeFactor: 0.75,       // sideways is slower than forward, as in most shooters
+  moveSmoothing: 11,        // per-second ramp, so a tap doesn't cross a corridor
   jumpV: 9,                 // original: vz = 8, gravity 16
   gravity: 26,
   shotSpeed: 120,
@@ -137,11 +142,14 @@ export function createSim(M) {
     p.aim = input.aim;
 
     // --- movement
+    // Respect the magnitude of the input, clamped to 1: normalising it unconditionally
+    // would throw away the view's acceleration ramp and its reduced strafe speed, and
+    // an analog stick at 20% would move you at full pace.
     const len = Math.hypot(input.mx, input.my);
-    p.moving = len > 0.01;
+    p.moving = len > 0.02;
     if (p.moving) {
-      slide(p, (input.mx / len) * T.playerSpeed * dt,
-               (input.my / len) * T.playerSpeed * dt, T.playerR);
+      const speed = Math.min(1, len) * T.playerSpeed * dt;
+      slide(p, (input.mx / len) * speed, (input.my / len) * speed, T.playerR);
     }
 
     // --- jump (the original had one; the 2D port dropped it)
@@ -259,12 +267,17 @@ export function createSim(M) {
       }
     }
     for (const d of S.donuts) {
-      if (d.got || p.hp >= T.startHP) continue;
+      if (d.got) continue;
       if (Math.hypot(p.x - d.x, p.y - d.y) < T.playerR + T.donutR) {
+        // The original always eats the donut and caps at 100. An earlier version of
+        // this skipped the pickup at full health to avoid "wasting" it, which is both
+        // unfaithful and reads as a broken pickup when you walk over one and nothing
+        // happens. Always eat it.
+        const before = p.hp;
         d.got = true;
         p.hp = Math.min(T.startHP, p.hp + T.donutHeal);
         emit("donut", d.x, d.y, 2.5);
-        say("+" + T.donutHeal + " health", 1.2);
+        say(p.hp > before ? "+" + (p.hp - before) + " health" : "Health already full", 1.2);
       }
     }
 
