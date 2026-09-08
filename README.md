@@ -219,18 +219,23 @@ channels.
 | triangles | 117,952 in view |
 | draw calls | 4–10 |
 | geometries / textures | 3 / 6 |
-| assets loaded | 10.96 MB (4 models) |
+| assets on disk | 10.96 MB (4 models) |
+| assets over the wire | **5.69 MB** — GitHub Pages gzips the `.glb`s |
 | Ralph | 48 joints, 2 clips, 7,100 tris |
 
 0.8 ms a frame is roughly 1,250 fps of rendering headroom — the scene is nowhere near
 being the bottleneck.
 
-One number that *isn't* good: **10.96 MB for four models.** That's the unsolved half.
+One number that *isn't* good: **10.96 MB for four models** — 5.69 MB after the host's
+gzip, which is a useful reminder that disk size and transfer size are different
+questions, and only one of them is what a player waits for. Either way it's the
+unsolved half.
 
 ### What's still unsolved
 
 1. **Decimation.** 48k triangles for a chicken and 126k for an eyeball are 10–20×
    more than needed. This is the single biggest win available and it isn't started.
+   It also shrinks what gzip can't: fewer vertices beats better-compressed vertices.
 2. **Mesh compression.** For a web game, **meshopt** (`EXT_meshopt_compression`) is the
    better default over Draco: similar or better ratios with markedly faster decode, and
    decode speed is what a player feels on load. Draco wins on raw file size if that's

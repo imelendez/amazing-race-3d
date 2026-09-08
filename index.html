@@ -23,6 +23,8 @@
   .row span:last-child { color:var(--dim); font-variant-numeric:tabular-nums; }
   hr { border:0; border-top:1px solid var(--line); margin:11px 0; }
 
+  .foot { margin:9px 0 0; font-size:10.5px; line-height:1.5; color:#5d6b7d; }
+  .foot b { color:#8fa1b5; font-weight:600; }
   .label { font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--dim); margin-bottom:6px; }
   .btns { display:flex; gap:6px; flex-wrap:wrap; }
   button {
@@ -52,12 +54,16 @@
   <div class="row"><span>three.js</span><span id="ver">—</span></div>
   <div class="row"><span>renderer</span><span id="rend">—</span></div>
   <div class="row"><span>fps</span><span id="fps">—</span></div>
+  <div class="row"><span>render cost</span><span id="cost">—</span></div>
   <div class="row"><span>draw calls</span><span id="calls">—</span></div>
   <div class="row"><span>triangles</span><span id="tris">—</span></div>
   <hr>
   <div class="row"><span>ralph joints</span><span id="joints">—</span></div>
   <div class="row"><span>clips</span><span id="clips">—</span></div>
   <div class="row"><span>assets</span><span id="mb">—</span></div>
+
+  <p class="foot">fps follows the browser's frame scheduler and drops in a background
+     tab. <b>Render cost</b> is the real number.</p>
 
   <hr>
   <div class="label">Ralph animation</div>
@@ -234,7 +240,7 @@ try {
 
   // ---- loop ----
   const clock = new THREE.Clock();
-  let fps = 0, acc = 0, frames = 0;
+  let acc = 0, frames = 0, renderMs = 0;
   let walkT = 0;
 
   renderer.setAnimationLoop(() => {
@@ -261,15 +267,21 @@ try {
       controls.update();
     }
 
+    // Time the draw itself. fps mixes frame cost with how often the browser
+    // schedules us; only one of those is something the scene controls.
+    const t0 = performance.now();
     renderer.render(scene, camera);
+    const ms = performance.now() - t0;
+    renderMs = renderMs ? renderMs * 0.9 + ms * 0.1 : ms;
 
     acc += dt; frames++;
     if (clock.elapsedTime < 1.2) { acc = 0; frames = 0; }   // ignore first-frame upload
     else if (acc >= 0.5) {
-      fps = frames / acc; acc = 0; frames = 0;
-      $("fps").textContent = fps.toFixed(0);
+      $("fps").textContent = (frames / acc).toFixed(0);
+      $("cost").textContent = renderMs.toFixed(2) + " ms";
       $("calls").textContent = renderer.info.render.calls;
       $("tris").textContent = renderer.info.render.triangles.toLocaleString();
+      acc = 0; frames = 0;
     }
   });
 
