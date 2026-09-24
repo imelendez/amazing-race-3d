@@ -328,10 +328,9 @@ const CAM_DIST = 8, CAM_HEIGHT = 2.6;
 // The maze mesh tops out at z = 8.33. Pitching up used to raise the boom past that
 // (2.6 + 8*sin(0.95) = 9.1) and pop the camera through the ceiling into open space.
 const CEILING_Z = 8.33, CAM_MIN_Z = 0.85;
+let camF = 1;                    // smoothed boom length, 0..1
 
-function updateCamera(p) {
-  // Look direction in game space, then converted. Pitch raises the camera rather
-  // than tilting past the character.
+function updateCamera(p, dt) {
   const back = CAM_DIST * Math.cos(pitch);
   const up = CAM_HEIGHT + CAM_DIST * Math.sin(pitch);
 
@@ -339,22 +338,34 @@ function updateCamera(p) {
   const py = p.y - Math.sin(yaw) * back;
 
   // Pull the camera in if a wall is between it and the player — the maze has
-  // 13-unit rooms, so a fixed boom ends up inside geometry constantly. Sample finely:
-  // at 8 steps an 8-unit boom skips a whole cell between probes and slides through
-  // thin walls.
+  // 13-unit rooms, so a fixed boom ends up inside geometry constantly.
   const STEPS = 20;
-  let f = 1;
+  let want = 1;
   for (let s = 1; s <= STEPS; s++) {
     const t = s / STEPS;
     const tx = p.x + (px - p.x) * t, ty = p.y + (py - p.y) * t;
-    if (sim.hitsWall(tx, ty, 1.4)) { f = Math.max(0.06, (s - 1) / STEPS); break; }
+    if (sim.hitsWall(tx, ty, 1.4)) { want = Math.max(0.10, (s - 1) / STEPS); break; }
   }
-  // keep the camera inside the building, whatever the pitch
-  const rawZ = p.z + up * f + 1.5 * (1 - f);
-  const camZ = Math.min(CEILING_Z - 1.15, Math.max(CAM_MIN_Z, rawZ));
-  camera.position.copy(TO3(p.x + (px - p.x) * f, p.y + (py - p.y) * f, camZ));
-  const look = TO3(p.x + Math.cos(yaw) * 9, p.y + Math.sin(yaw) * 9, p.z + 3.4);
-  camera.lookAt(look);
+  // `want` is quantised to 1/20 steps, so using it raw made the camera jump every
+  // time the boom grazed geometry — which is most of a turn in a corridor, and reads
+  // as the whole view stuttering. Ease toward it instead: snap in quickly so the
+  // camera is never left inside a wall, drift back out slowly.
+  camF += (want - camF) * Math.min(1, dt * (want < camF ? 20 : 6));
+
+  const camZ = Math.min(CEILING_Z - 1.15, Math.max(CAM_MIN_Z, p.z + 1.2 + (up - 1.2) * camF));
+  camera.position.copy(TO3(p.x + (px - p.x) * camF, p.y + (py - p.y) * camF, camZ));
+
+  // The look target has to come in with the boom. Held at a fixed 9 units ahead, a
+  // camera pulled tight against a wall ends up above the character and he falls off
+  // the bottom of the screen (measured at NDC y = -1.48, i.e. fully out of frame).
+  // Pitching down also raises the boom, which tilts the view away from the character.
+  // Compensate: the further the camera is pitched, the nearer and lower it aims, so
+  // the character stays in shot instead of sliding off the bottom edge.
+  const tilt = Math.max(0, pitch) / 0.58;
+  const ahead = (1.5 + 5.5 * camF) * (1 - 0.55 * tilt);
+  camera.lookAt(TO3(p.x + Math.cos(yaw) * ahead,
+                    p.y + Math.sin(yaw) * ahead,
+                    p.z + 1.7 - 0.95 * tilt));
   key.position.copy(TO3(p.x + 40, p.y + 30, 90));
   key.target.position.copy(TO3(p.x, p.y, 0));
   key.target.updateMatrixWorld();
@@ -392,6 +403,7 @@ function handleEvents() {
       case "orb": Sound.orb(); burst(ev.x, ev.y, ev.z, new THREE.Color(ORB_TINT[ev.color] || 0xffffff), 14, 10); break;
       case "donut": Sound.donut(); burst(ev.x, ev.y, ev.z, 0xffb35c, 10, 9); break;
       case "damage": Sound.damage(); flash(); break;
+      case "deflect": burst(ev.x, ev.y, ev.z, 0x9fd8ff, 3, 8); break;
       case "denied": Sound.denied(); break;
       case "jump": Sound.jump(); break;
       case "win": Sound.win(); finish(true); break;
@@ -523,7 +535,7 @@ function frame(dtOverride) {
     q.material.opacity = 1 - q.userData.t / q.userData.life;
   }
 
-  updateCamera(p);
+  updateCamera(p, dt);
 
   if (hurt > 0) { hurt = Math.max(0, hurt - dt * 2.2); $("hurt").style.opacity = hurt * 0.45; }
 

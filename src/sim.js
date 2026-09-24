@@ -10,11 +10,15 @@
  */
 
 export const T = {
-  playerR: 3.2,
+  // Ralph measures 0.50 x 0.58 x 1.04 units. A 3.2 radius is 6.4 units across —
+  // roughly 13x his actual width — and it left only 58% of the open maze standable,
+  // so corridors and doorways had to be threaded exactly. 1.6 is still over six
+  // times his real width and opens up 78% of the maze.
+  playerR: 1.6,
   // The original ran at 60, but that was a top-down/behind view of a 1-unit-tall
   // character in ~15-unit corridors — 58 units/sec is nearly 60 body-lengths a
   // second, which reads as teleporting from a third-person camera. Slower here.
-  playerSpeed: 44,
+  playerSpeed: 32,
   strafeFactor: 0.75,       // sideways is slower than forward, as in most shooters
   moveSmoothing: 11,        // per-second ramp, so a tap doesn't cross a corridor
   jumpV: 9,                 // original: vz = 8, gravity 16
@@ -30,9 +34,18 @@ export const T = {
   enemyPatrol: 5,           // ±5 units on a fixed axis — from the original
   enemyShotSpeed: 62,
   enemyShotR: 1.4,
-  enemyFireCd: 1.15,
-  enemySightRange: 155,
+  enemyFireCd: 1.45,
+  // 155 units is most of a wing of the maze — you were being shot by enemies too
+  // far off to make out. Pulled in to roughly what you can see coming.
+  enemySightRange: 115,
   enemyDamage: 5,           // −5 HP per hit, from the original
+  // Without a recovery window, damage from several enemies stacks linearly: one
+  // enemy alone emptied 100 HP in 23 seconds, and three did it in eight. Brief
+  // invulnerability after a hit caps incoming damage no matter how many have
+  // line of sight, which is what "breathing room" actually means here. Set above the
+  // enemy cadence (1.45) so the worst case with a dozen enemies looking at you is no
+  // worse than being shot at by one.
+  invulnTime: 1.2,
 
   orbR: 5,
   donutR: 5,
@@ -101,7 +114,7 @@ export function createSim(M) {
     S.events.length = 0;
     S.player = {
       x: M.SPAWN.x, y: M.SPAWN.y, z: 0, vz: 0,
-      aim: Math.PI / 2, hp: T.startHP, cd: 0,
+      aim: Math.PI / 2, hp: T.startHP, cd: 0, invuln: 0,
       grounded: true, moving: false,
     };
     S.enemies = M.ENEMIES.map((e) => ({
@@ -140,6 +153,7 @@ export function createSim(M) {
 
     const p = S.player;
     p.aim = input.aim;
+    if (p.invuln > 0) p.invuln -= dt;
 
     // --- movement
     // Respect the magnitude of the input, clamped to 1: normalising it unconditionally
@@ -250,6 +264,8 @@ export function createSim(M) {
       if (Math.hypot(p.x - s.x, p.y - s.y) < T.playerR + T.enemyShotR &&
           Math.abs(p.z + 1.4 - s.z) < 2.4) {
         S.eshots.splice(i, 1);
+        if (p.invuln > 0) { emit("deflect", p.x, p.y, p.z + 1.4); continue; }
+        p.invuln = T.invulnTime;
         p.hp -= T.enemyDamage;
         emit("damage", p.x, p.y, p.z + 1.4);
         if (p.hp <= 0) { p.hp = 0; return end(false, "You ran out of health."); }
