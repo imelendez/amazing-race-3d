@@ -2,7 +2,8 @@
 
 **[▶ Play it](https://imelendez.github.io/amazing-race-3d/)**
 
-A playable 3D browser port of a 2016 Panda3D college game, running the original's own
+A playable 3D browser port of [a 2016 Panda3D college
+game](https://github.com/imelendez/TheAmazeingRace), running the original's own
 maze, models, and character rig. Kill 4 enemies, collect 3 orbs, reach the portal
 before the 4:00 clock runs out.
 
@@ -19,10 +20,15 @@ took to make it playable. The conversion tool is
 
 *The 2016 maze art, in Three.js. Ceiling clipped away so you can see in.*
 
-This is a **spike**, not a game — it exists to answer one question before anyone
-commits to a full 3D port: *can the original art get to the web with its rigging
-intact?* Everything below is the reasoning, including the parts I got wrong,
-because the wrong turns are the useful bit.
+![Finishing the game](docs/you-win.png)
+
+*A genuine finish — four kills, five orbs, 57 seconds left on the clock.*
+
+It began as a spike: one question, asked before committing to a full port — *can the
+original art reach the web with its rigging intact?* The answer was yes, so it became
+a game. Sections 1–10 are that spike, written up including the parts I got wrong,
+because the wrong turns are the useful bit. [§11](#11-from-spike-to-game) is what it
+took to turn it into something you can actually finish.
 
 ---
 
@@ -230,17 +236,16 @@ channels.
 | triangles | 117,952 in view |
 | draw calls | 4–10 |
 | geometries / textures | 3 / 6 |
-| assets on disk | 10.96 MB (4 models) |
-| assets over the wire | **5.69 MB** — GitHub Pages gzips the `.glb`s |
+| assets on disk | **5.13 MB** (4 models, down from 10.96) |
+| total page weight | ~3.6 MB over the wire — GitHub Pages gzips the `.glb`s |
 | Ralph | 48 joints, 2 clips, 7,100 tris |
 
 0.8 ms a frame is roughly 1,250 fps of rendering headroom — the scene is nowhere near
 being the bottleneck.
 
-One number that *isn't* good: **10.96 MB for four models** — 5.69 MB after the host's
-gzip, which is a useful reminder that disk size and transfer size are different
-questions, and only one of them is what a player waits for. Either way it's the
-unsolved half.
+Disk size and transfer size are different questions, and only one of them is what a
+player waits for. See [§11](#the-asset-diet) for how the four models went from 10.96 MB
+to 5.13 MB without touching a single triangle.
 
 ### What's still unsolved
 
@@ -253,21 +258,22 @@ unsolved half.
    the only axis you care about.
 3. **Texture compression.** Textures are embedded as raw PNG/JPEG. KTX2/Basis would
    cut both download and GPU memory.
-4. **Camera collision.** The spawn room is ~13 units across and the chase camera
-   happily reverses into a wall. Needs a collision-aware camera — the wall grid from
-   Phase 2 can drive it.
+Camera collision *was* on this list — the chase camera reversed straight into walls in
+the ~13-unit rooms. It's now solved with the Phase 2 wall grid; see §11.
 
-A realistic target after (1)–(3) is **3–6 MB total**, which is a normal web game.
+A realistic target after (1)–(3) is **2–3 MB**, roughly half again on what's there now.
 
 ## 9. Running it
 
 ```bash
-python3 serve.py 8124
+python3 serve.py 8125
 ```
 
-Then <http://127.0.0.1:8124/>. Orbit / Chase / Top cameras; run / walk / stop clips.
-The Top and Orbit views clip the ceiling away — the maze mesh has a roof, so an
-un-clipped camera above it just sees roofing.
+- <http://127.0.0.1:8125/> — the game.
+- <http://127.0.0.1:8125/spike.html> — the original viewer, kept as-is: Orbit / Chase /
+  Top cameras and run / walk / stop clips. Its Top and Orbit views clip the ceiling
+  away, because the maze mesh has a roof and an un-clipped camera above it just sees
+  roofing.
 
 Re-export assets (needs the original repo and `pip install panda3d`):
 
@@ -277,13 +283,91 @@ python3 tools/panda2gltf.py --actor models/ralph --out assets/ralph.glb --scale 
     --model-path /path/to/TheAmazeingRace
 ```
 
-## 10. Verdict
+## 10. Verdict on the spike
 
-The risky part of Phase 3 is no longer risky. The art converts, the rig survives, the
-animation is numerically exact, and the frame costs under a millisecond. What remains
-is asset
-optimisation and assembly against a simulation that already exists and already passes
-its tests.
+The risky part was never risky after all. The art converts, the rig survives, the
+animation is numerically exact, and a frame costs under a millisecond. Which left
+assembly — and that's §11.
 
-Phase 2 remains the shippable deliverable — [play it](https://imelendez.github.io/amazing-race-web/).
-Phase 3 is now a known quantity rather than an open question.
+## 11. From spike to game
+
+### One simulation, two views
+
+The rules live in [`src/sim.js`](src/sim.js): headless, no DOM, no Three.js. It owns
+health, damage, patrol behaviour, pickups, the portal gate and the clock, and nothing
+about how any of it looks. [`src/game3d.js`](src/game3d.js) is a *view* over it —
+rendering, camera, input, audio.
+
+That split is why this repo is a port rather than a rewrite: the same rules already ran
+the [2D Canvas version](https://github.com/imelendez/amazing-race-web) against 29 tests.
+Collision is the Phase 2 wall grid — 242×276 cells, 2.7 KB, the real floorplan — so the
+3D build renders in three dimensions and collides in two, plus a Z axis for the jump the
+original had and the 2D port dropped.
+
+![Gameplay](docs/gameplay3d.png)
+
+*Mid-run: an orb going up in sparks, a donut ahead, and one of the chickens closing in
+from the right.*
+
+### What playing it actually found
+
+None of this came from a test suite. All of it came from someone playing for a minute.
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| "camera goes out above" | boom rose to `2.6 + 8·sin(0.95) = 9.1`; the maze ends at 8.33 | clamp below the ceiling; sample the boom at 20 points, not 8 — at 8 an 8-unit boom skips a whole cell and slides through thin walls |
+| "turning is not smooth" | the boom's pull-in factor is quantised to 1/20 and was applied raw every frame, so the view popped whenever it grazed geometry | ease toward it: snap in fast so the camera is never inside a wall, drift out slowly |
+| "eat the donuts, it does not" | I'd invented a "don't waste it at full health" rule; the original always eats it and caps at 100 | always eat it — and the same invented rule was in the 2D build, with a test asserting it |
+| "moves too fast" | 58 units/sec, applied instantly, to a character **1.04 units tall** | 32, strafe ×0.75, input ramped over ~90 ms |
+| "being stopped from proceeding" | collision radius 3.2 = 6.4 units across, ~13× Ralph's real 0.50-unit width — only 58% of the maze was standable | radius 1.6; standable cells 4,941 → **6,717**, every objective still reachable, no stranded pockets |
+| "dies too fast, no breathing room" | no recovery window, so damage stacked linearly — one enemy emptied 100 HP in 23 s, six did it in about four | 1.2 s invulnerability after each hit; sight 155 → 115; cadence 1.15 → 1.45 |
+
+Survival standing still in the open, before and after the invulnerability window:
+
+| | before | after |
+| --- | ---: | ---: |
+| 1 enemy | 23.1 s | 29.2 s |
+| 6 enemies | ~4 s | 28.9 s |
+
+Capping damage by *time* rather than by source is what "breathing room" turned out to
+mean: it makes being seen by six enemies no worse than being seen by one.
+
+Two of these are worth keeping as general lessons. **A hitbox inherited from a
+different view of the same game was 13× too big** — in the top-down port the player was
+*drawn* at that size, so it looked right there and was invisible here until someone
+walked into a doorway. And **the character was completely off-screen at NDC y = −1.48**
+and I hadn't noticed, because the look target was pinned 9 units ahead no matter how
+short the boom was. I only found it by projecting his world position to screen space
+and checking the number, which is the kind of thing you do instead of squinting at a
+screenshot.
+
+### The asset diet
+
+The four models started at **10.96 MB** and ended at **5.13 MB**, without removing a
+single triangle:
+
+- **Welding by position, averaging normals.** Exact welding merged 40 vertices out of
+  cheken2's 101,268 — the mesh has a split normal on every face, so nothing ever
+  matches. Dropping the normal from the key and averaging instead merged **77,075**:
+  3.64 MB → 1.29 MB. The trade is hard facets for smooth shading, which on an organic
+  blob is an improvement anyway.
+- **16-bit indices.** Every mesh here is under 65,536 vertices, so 32-bit indices were
+  pure waste — that's half the index buffer back.
+- **Texture downscaling.** `space.png` shipped at 1884×1064 and 2.63 MB, for a portal
+  nobody inspects up close. Capped at 512 px.
+
+`gianteye` barely moved under welding (10 vertices), and that's informative rather than
+disappointing: 64,170 vertices for 126,134 triangles is already near-optimal sharing.
+Its weight is real geometry, so the only lever left on it is decimation.
+
+Phase 2 remains the simplest thing to hand someone —
+[play it](https://imelendez.github.io/amazing-race-web/) — but this one is finishable
+now too.
+
+## The three repos
+
+| | |
+| --- | --- |
+| [TheAmazeingRace](https://github.com/imelendez/TheAmazeingRace) | The 2016 Panda3D original. Still runs — it needed a current Panda3D and a four-line Python 2 → 3 fix, nothing else. |
+| [amazing-race-web](https://github.com/imelendez/amazing-race-web) | [2D Canvas port.](https://imelendez.github.io/amazing-race-web/) Dependency-free, 44 KB, 29 tests. The maze was extracted from the original's 3D model. |
+| **amazing-race-3d** | [This one.](https://imelendez.github.io/amazing-race-3d/) The original art and rig, in Three.js. |
